@@ -12,11 +12,12 @@ WHERE TO RUN: astro4 (direct internet; this is a network job, NOT a cluster
 job). From ~/github/projects_des/programs_igmdust:
     nohup nice -n 19 python3 00b_fetch_dr2_colors.py > ~/des_dr2colors.log 2>&1 &
 
-Chunked (5,000 ids per query, 4 parallel workers, 3 retries each); part
-files land in $DEST/parts_dr2colors/ and are stitched to
-$DEST/redmagic_highlum_highz_dr2colors.fits at the end. Idempotent:
-existing part files are skipped on rerun.
+Chunked (5,000 ids per query, 4 parallel workers, 3 retries each); CSV part
+files land in $DEST/parts_dr2colors/ (the Data Lab sync TAP does not serve
+FITS) and are stitched to $DEST/redmagic_highlum_highz_dr2colors.fits at
+the end. Idempotent: existing part files are skipped on rerun.
 """
+import io
 import os
 import sys
 import time
@@ -44,18 +45,25 @@ COLS_PLAIN = COLS_DERED.replace("_dered", "")
 
 
 def tap_query(adql, timeout=300):
+    """Run a sync TAP query, return the decoded CSV text (validated)."""
     data = urllib.parse.urlencode(dict(
-        REQUEST="doQuery", LANG="ADQL", FORMAT="fits", QUERY=adql)).encode()
+        REQUEST="doQuery", LANG="ADQL", FORMAT="csv", QUERY=adql)).encode()
     req = urllib.request.Request(TAP, data=data)
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+        text = r.read().decode("utf-8", "replace")
+    if text.lstrip().startswith("<?xml") or "QUERY_STATUS" in text[:2000]:
+        raise RuntimeError(f"TAP error: {text[:300]}")
+    return text
 
 
 def pick_columns():
     """Probe whether the _dered columns exist; fall back to plain."""
     for cols in (COLS_DERED, COLS_PLAIN):
         try:
-            tap_query(f"SELECT TOP 1 {cols} FROM des_dr2.main", timeout=60)
+            t = Table.read(io.StringIO(
+                tap_query(f"SELECT TOP 1 {cols} FROM des_dr2.main",
+                          timeout=120)), format="csv")
+            assert len(t.colnames) >= 10
             print(f"columns OK: {'dered' if cols is COLS_DERED else 'PLAIN'}")
             return cols
         except Exception as e:                          # noqa: BLE001
@@ -65,7 +73,7 @@ def pick_columns():
 
 def fetch_chunk(args):
     i, ids, cols = args
-    part = f"{PARTS}/part_{i:04d}.fits"
+    part = f"{PARTS}/part_{i:04d}.csv"
     if os.path.exists(part) and os.path.getsize(part) > 0:
         return f"{i}: cached"
     idlist = ",".join(map(str, ids))
@@ -73,14 +81,14 @@ def fetch_chunk(args):
             f"WHERE coadd_object_id IN ({idlist})")
     for attempt in range(3):
         try:
-            blob = tap_query(adql)
-            with open(part + ".tmp", "wb") as f:
-                f.write(blob)
-            n = len(Table.read(part + ".tmp"))          # validates FITS
+            text = tap_query(adql)
+            n = len(Table.read(io.StringIO(text), format="csv"))  # validate
+            with open(part + ".tmp", "w") as f:
+                f.write(text)
             os.replace(part + ".tmp", part)
             return f"{i}: {n} rows"
         except Exception as e:                          # noqa: BLE001
-            time.sleep(5 * (attempt + 1))
+            time.sleep(10 * (attempt + 1))
             err = e
     return f"{i}: FAILED after 3 tries ({err})"
 
@@ -103,7 +111,8 @@ def main():
         sys.exit(f"{nfail} chunks failed -- rerun to retry (parts cached)")
 
     print("stitching...")
-    tabs = [Table.read(f"{PARTS}/part_{i:04d}.fits") for i in range(len(jobs))]
+    tabs = [Table.read(f"{PARTS}/part_{i:04d}.csv", format="csv")
+            for i in range(len(jobs))]
     full = vstack(tabs, metadata_conflicts="silent")
     full.write(OUT, overwrite=True)
     print(f"{len(full):,} / {len(ids):,} matched -> {OUT}")
