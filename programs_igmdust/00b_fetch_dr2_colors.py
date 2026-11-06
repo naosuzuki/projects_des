@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+00b_fetch_dr2_colors.py — igmdust/DES: fetch griz photometry for the Y3A2
+redMaGiC highlum_highz "crayon" galaxies from DES DR2 via the NOIRLab Astro
+Data Lab TAP service (anonymous, sync).
+
+WHY: the redMaGiC value-added catalog carries only mag_z + zredmagic; the
+reddening estimator needs griz colors. We pull them from des_dr2.main
+matched by coadd_object_id (850,028 rows -> ~100 MB).
+
+WHERE TO RUN: astro4 (direct internet; this is a network job, NOT a cluster
+job). From ~/github/projects_des/programs_igmdust:
+    nohup nice -n 19 python3 00b_fetch_dr2_colors.py > ~/des_dr2colors.log 2>&1 &
+
+Chunked (5,000 ids per query, 4 parallel workers, 3 retries each); part
+files land in $DEST/parts_dr2colors/ and are stitched to
+$DEST/redmagic_highlum_highz_dr2colors.fits at the end. Idempotent:
+existing part files are skipped on rerun.
+"""
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+from astropy.io import fits
+from astropy.table import Table, vstack
+
+DEST = "/home/suzuki/data/DES/catalog/redmagic"
+SRC = f"{DEST}/y3a2_gold2.2.1_redmagic_highlum_highz.fits"
+PARTS = f"{DEST}/parts_dr2colors"
+OUT = f"{DEST}/redmagic_highlum_highz_dr2colors.fits"
+TAP = "https://datalab.noirlab.edu/tap/sync"
+CHUNK = 5_000
+WORKERS = 4
+
+COLS_DERED = ("coadd_object_id, ra, dec, "
+              "mag_auto_g_dered, mag_auto_r_dered, mag_auto_i_dered, "
+              "mag_auto_z_dered, magerr_auto_g, magerr_auto_r, "
+              "magerr_auto_i, magerr_auto_z")
+COLS_PLAIN = COLS_DERED.replace("_dered", "")
+
+
+def tap_query(adql, timeout=300):
+    data = urllib.parse.urlencode(dict(
+        REQUEST="doQuery", LANG="ADQL", FORMAT="fits", QUERY=adql)).encode()
+    req = urllib.request.Request(TAP, data=data)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def pick_columns():
+    """Probe whether the _dered columns exist; fall back to plain."""
+    for cols in (COLS_DERED, COLS_PLAIN):
+        try:
+            tap_query(f"SELECT TOP 1 {cols} FROM des_dr2.main", timeout=60)
+            print(f"columns OK: {'dered' if cols is COLS_DERED else 'PLAIN'}")
+            return cols
+        except Exception as e:                          # noqa: BLE001
+            print(f"probe failed ({e}); trying fallback")
+    sys.exit("no usable column set on des_dr2.main")
+
+
+def fetch_chunk(args):
+    i, ids, cols = args
+    part = f"{PARTS}/part_{i:04d}.fits"
+    if os.path.exists(part) and os.path.getsize(part) > 0:
+        return f"{i}: cached"
+    idlist = ",".join(map(str, ids))
+    adql = (f"SELECT {cols} FROM des_dr2.main "
+            f"WHERE coadd_object_id IN ({idlist})")
+    for attempt in range(3):
+        try:
+            blob = tap_query(adql)
+            with open(part + ".tmp", "wb") as f:
+                f.write(blob)
+            n = len(Table.read(part + ".tmp"))          # validates FITS
+            os.replace(part + ".tmp", part)
+            return f"{i}: {n} rows"
+        except Exception as e:                          # noqa: BLE001
+            time.sleep(5 * (attempt + 1))
+            err = e
+    return f"{i}: FAILED after 3 tries ({err})"
+
+
+def main():
+    os.makedirs(PARTS, exist_ok=True)
+    ids = np.sort(np.asarray(fits.getdata(SRC)["coadd_object_id"], np.int64))
+    print(f"{len(ids):,} redMaGiC ids -> {int(np.ceil(len(ids)/CHUNK))} chunks")
+    cols = pick_columns()
+    jobs = [(i, ids[i * CHUNK:(i + 1) * CHUNK], cols)
+            for i in range(int(np.ceil(len(ids) / CHUNK)))]
+    t0, nfail = time.time(), 0
+    with ThreadPoolExecutor(WORKERS) as ex:
+        for k, msg in enumerate(ex.map(fetch_chunk, jobs)):
+            nfail += "FAILED" in msg
+            if k % 10 == 0 or "FAILED" in msg:
+                print(f"[{k+1}/{len(jobs)}] {msg}  {time.time()-t0:.0f}s",
+                      flush=True)
+    if nfail:
+        sys.exit(f"{nfail} chunks failed -- rerun to retry (parts cached)")
+
+    print("stitching...")
+    tabs = [Table.read(f"{PARTS}/part_{i:04d}.fits") for i in range(len(jobs))]
+    full = vstack(tabs, metadata_conflicts="silent")
+    full.write(OUT, overwrite=True)
+    print(f"{len(full):,} / {len(ids):,} matched -> {OUT}")
+    print(f"DES_DR2COLORS_DONE {time.strftime('%F %T')}")
+
+
+if __name__ == "__main__":
+    main()
