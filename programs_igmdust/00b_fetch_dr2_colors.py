@@ -17,7 +17,6 @@ files land in $DEST/parts_dr2colors/ (the Data Lab sync TAP does not serve
 FITS) and are stitched to $DEST/redmagic_highlum_highz_dr2colors.fits at
 the end. Idempotent: existing part files are skipped on rerun.
 """
-import io
 import os
 import sys
 import time
@@ -60,9 +59,8 @@ def pick_columns():
     """Probe whether the _dered columns exist; fall back to plain."""
     for cols in (COLS_DERED, COLS_PLAIN):
         try:
-            t = Table.read(io.StringIO(
-                tap_query(f"SELECT TOP 1 {cols} FROM des_dr2.main",
-                          timeout=120)), format="csv")
+            t = Table.read(tap_query(f"SELECT TOP 1 {cols} FROM des_dr2.main",
+                                     timeout=120), format="ascii.csv")
             assert len(t.colnames) >= 10
             print(f"columns OK: {'dered' if cols is COLS_DERED else 'PLAIN'}")
             return cols
@@ -82,7 +80,7 @@ def fetch_chunk(args):
     for attempt in range(3):
         try:
             text = tap_query(adql)
-            n = len(Table.read(io.StringIO(text), format="csv"))  # validate
+            n = len(Table.read(text, format="ascii.csv"))        # validate
             with open(part + ".tmp", "w") as f:
                 f.write(text)
             os.replace(part + ".tmp", part)
@@ -111,7 +109,7 @@ def main():
         sys.exit(f"{nfail} chunks failed -- rerun to retry (parts cached)")
 
     print("stitching...")
-    tabs = [Table.read(f"{PARTS}/part_{i:04d}.csv", format="csv")
+    tabs = [Table.read(f"{PARTS}/part_{i:04d}.csv", format="ascii.csv")
             for i in range(len(jobs))]
     full = vstack(tabs, metadata_conflicts="silent")
     full.write(OUT, overwrite=True)
