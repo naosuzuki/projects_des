@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-00b_fetch_dr2_colors.py — igmdust/DES: fetch griz photometry for the Y3A2
-redMaGiC highlum_highz "crayon" galaxies from DES DR2 via the NOIRLab Astro
+00b_fetch_y3gold_colors.py — igmdust/DES: fetch griz photometry for the Y3A2
+redMaGiC highlum_highz "crayon" galaxies from Y3 GOLD via the NOIRLab Astro
 Data Lab TAP service (anonymous, sync).
 
 WHY: the redMaGiC value-added catalog carries only mag_z + zredmagic; the
-reddening estimator needs griz colors. We pull them from des_dr2.main
-matched by coadd_object_id (850,028 rows -> ~100 MB).
+reddening estimator needs griz colors. redMaGiC coadd_object_ids are Y3
+Gold ids (DR1 coadd namespace — they do NOT exist in des_dr2), so we pull
+sof_cm_mag_corrected_[griz] (dereddened SOF composite-model photometry,
+the standard Y3 choice) from des_dr1.y3_gold (850,028 rows -> ~100 MB).
 
 WHERE TO RUN: astro4 (direct internet; this is a network job, NOT a cluster
 job). From ~/github/projects_des/programs_igmdust:
-    nohup nice -n 19 python3 00b_fetch_dr2_colors.py > ~/des_dr2colors.log 2>&1 &
+    nohup nice -n 19 python3 00b_fetch_y3gold_colors.py > ~/des_y3gold_colors.log 2>&1 &
 
 Chunked (5,000 ids per query, 4 parallel workers, 3 retries each); CSV part
 files land in $DEST/parts_dr2colors/ (the Data Lab sync TAP does not serve
-FITS) and are stitched to $DEST/redmagic_highlum_highz_dr2colors.fits at
+FITS) and are stitched to $DEST/redmagic_highlum_highz_y3gold_colors.fits at
 the end. Idempotent: existing part files are skipped on rerun.
 """
 import os
@@ -31,16 +33,21 @@ from astropy.table import Table, vstack
 DEST = "/home/suzuki/data/DES/catalog/redmagic"
 SRC = f"{DEST}/y3a2_gold2.2.1_redmagic_highlum_highz.fits"
 PARTS = f"{DEST}/parts_dr2colors"
-OUT = f"{DEST}/redmagic_highlum_highz_dr2colors.fits"
+OUT = f"{DEST}/redmagic_highlum_highz_y3gold_colors.fits"
 TAP = "https://datalab.noirlab.edu/tap/sync"
 CHUNK = 5_000
 WORKERS = 4
 
-COLS_DERED = ("coadd_object_id, ra, dec, "
-              "mag_auto_g_dered, mag_auto_r_dered, mag_auto_i_dered, "
-              "mag_auto_z_dered, magerr_auto_g, magerr_auto_r, "
-              "magerr_auto_i, magerr_auto_z")
-COLS_PLAIN = COLS_DERED.replace("_dered", "")
+TABLE = "des_dr1.y3_gold"
+COLS_DERED = ("coadd_object_id, "
+              "sof_cm_mag_corrected_g, sof_cm_mag_corrected_r, "
+              "sof_cm_mag_corrected_i, sof_cm_mag_corrected_z, "
+              "sof_cm_mag_err_g, sof_cm_mag_err_r, "
+              "sof_cm_mag_err_i, sof_cm_mag_err_z, "
+              "flags_gold, extended_class_sof")
+COLS_PLAIN = ("coadd_object_id, mag_auto_g, mag_auto_r, mag_auto_i, "
+              "mag_auto_z, magerr_auto_g, magerr_auto_r, magerr_auto_i, "
+              "magerr_auto_z, flags_gold, extended_class_sof")
 
 
 def tap_query(adql, timeout=300):
@@ -59,14 +66,14 @@ def pick_columns():
     """Probe whether the _dered columns exist; fall back to plain."""
     for cols in (COLS_DERED, COLS_PLAIN):
         try:
-            t = Table.read(tap_query(f"SELECT TOP 1 {cols} FROM des_dr2.main",
+            t = Table.read(tap_query(f"SELECT TOP 1 {cols} FROM {TABLE}",
                                      timeout=120), format="ascii.csv")
             assert len(t.colnames) >= 10
-            print(f"columns OK: {'dered' if cols is COLS_DERED else 'PLAIN'}")
+            print(f"columns OK: {'SOF corrected' if cols is COLS_DERED else 'mag_auto'}")
             return cols
         except Exception as e:                          # noqa: BLE001
             print(f"probe failed ({e}); trying fallback")
-    sys.exit("no usable column set on des_dr2.main")
+    sys.exit(f"no usable column set on {TABLE}")
 
 
 def fetch_chunk(args):
@@ -75,7 +82,7 @@ def fetch_chunk(args):
     if os.path.exists(part) and os.path.getsize(part) > 0:
         return f"{i}: cached"
     idlist = ",".join(map(str, ids))
-    adql = (f"SELECT {cols} FROM des_dr2.main "
+    adql = (f"SELECT {cols} FROM {TABLE} "
             f"WHERE coadd_object_id IN ({idlist})")
     for attempt in range(3):
         try:
