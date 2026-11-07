@@ -191,7 +191,10 @@ def main(a):
     pc.R_COEF["i"] = R_I
     pc.COLORS = COLORS_DES
     pc.JK_NSIDE = JK_NSIDE
-    pc.FG_ZRANGE["descrayon"] = pc.FG_ZRANGE["bgs"]
+    # --fg lrg is the McCleary-style quiescent case: DESI spectroscopic
+    # LRGs in place of her redMaGiC foregrounds, same crayon backgrounds.
+    name = "descrayon" if a.fg == "bgs" else "descrayonlrg"
+    pc.FG_ZRANGE[name] = pc.FG_ZRANGE[a.fg]
     # crayons are ~200/deg2 and low-z slices sweep 2.7 deg radii: 50k-fg
     # chunks OOM-killed the 20G SLURM job on the randoms pass; 10k is safe.
     pc.CHUNK = 10_000
@@ -201,19 +204,19 @@ def main(a):
     cra, cdec, cz, cres, cval = load_crayons(a.des_dir)
     good = load_footprint(a.des_dir)
 
-    print("== foregrounds: DESI DR1 BGS")
-    fra, fdec, fz, fw = pc.load_lss(a.base, "bgs", "dat")
-    m = in_footprint(good, fra, fdec, "BGS")
+    print(f"== foregrounds: DESI DR1 {a.fg.upper()}")
+    fra, fdec, fz, fw = pc.load_lss(a.base, a.fg, "dat")
+    m = in_footprint(good, fra, fdec, a.fg.upper())
     fra, fdec, fz, fw = fra[m], fdec[m], fz[m], fw[m]
     if m.sum() == 0:
-        sys.exit("no BGS galaxies in the DES footprint — check mask/ordering")
+        sys.exit("no foregrounds in the DES footprint — check mask/ordering")
 
-    print("== randoms: DESI DR1 BGS LSS randoms")
-    rra, rdec, rz, rw = pc.load_lss(a.base, "bgs", "ran", nran=a.nran)
+    print(f"== randoms: DESI DR1 {a.fg.upper()} LSS randoms")
+    rra, rdec, rz, rw = pc.load_lss(a.base, a.fg, "ran", nran=a.nran)
     m = in_footprint(good, rra, rdec, "randoms")
     rra, rdec, rz, rw = rra[m], rdec[m], rz[m], rw[m]
 
-    pc.run_arrays("descrayon", (fra, fdec, fz, fw), (rra, rdec, rz, rw),
+    pc.run_arrays(name, (fra, fdec, fz, fw), (rra, rdec, rz, rw),
                   (cra, cdec, cz, cres, cval), edges, rp_mid, a.out,
                   a.max_fg, tag=f"_sub{a.max_fg}" if a.max_fg else "")
 
@@ -250,6 +253,8 @@ def selftest():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument("--fg", choices=["bgs", "lrg"], default="bgs",
+                    help="foreground sample (lrg = McCleary-style)")
     ap.add_argument("--pc02", default=PC02_DEFAULT,
                     help="path to projects_desi 02_paircount.py")
     ap.add_argument("--des-dir", default=DES_DIR_DEFAULT)
