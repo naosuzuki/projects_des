@@ -59,19 +59,26 @@ def load_pc(path):
 
 
 # ---------------------------------------------------------------- crayons ---
-def locus_residuals(z, colors, valid):
-    """Observed color minus the median red-sequence locus at that redshift."""
+def locus_table(z, colors, valid, nmin=None):
+    """Median red-sequence locus per color in LOCUS_DZ redshift bins."""
     zb = np.arange(CRAYON_ZRANGE[0], CRAYON_ZRANGE[1] + LOCUS_DZ, LOCUS_DZ)
     zc = 0.5 * (zb[:-1] + zb[1:])
-    res = np.full_like(colors, np.nan)
+    med = np.full((len(zc), colors.shape[1]), np.nan)
     for c in range(colors.shape[1]):
-        med = np.full(len(zc), np.nan)
         for i in range(len(zc)):
             m = valid[:, c] & (z >= zb[i]) & (z < zb[i + 1])
-            if m.sum() >= LOCUS_NMIN:
-                med[i] = np.median(colors[m, c])
-        ok = np.isfinite(med)
-        res[:, c] = colors[:, c] - np.interp(z, zc[ok], med[ok])
+            if m.sum() >= (nmin or LOCUS_NMIN):
+                med[i, c] = np.median(colors[m, c])
+    return zc, med
+
+
+def locus_residuals(z, colors, valid):
+    """Observed color minus the median red-sequence locus at that redshift."""
+    zc, med = locus_table(z, colors, valid)
+    res = np.full_like(colors, np.nan)
+    for c in range(colors.shape[1]):
+        ok = np.isfinite(med[:, c])
+        res[:, c] = colors[:, c] - np.interp(z, zc[ok], med[ok, c])
         r = res[valid[:, c], c]
         sig = 1.4826 * np.median(np.abs(r - np.median(r)))
         a, b = COLORS_DES[c]
@@ -80,8 +87,11 @@ def locus_residuals(z, colors, valid):
     return res
 
 
-def load_crayons(des_dir):
-    """redMaGiC crayons joined to Y3 Gold colors; locus residuals + valid."""
+def load_crayons(des_dir, raw=False):
+    """redMaGiC crayons joined to Y3 Gold colors; locus residuals + valid.
+
+    raw=True returns the observed colors instead of the locus residuals
+    (02_speczcalib builds its own loci against spectroscopic redshifts)."""
     with fits.open(f"{des_dir}/{CRAYON_FILE}") as h:
         d = h[1].data
         cid = np.asarray(d["coadd_object_id"], np.int64)
@@ -114,6 +124,8 @@ def load_crayons(des_dir):
                               for a, b in COLORS_DES])
     valid = np.column_stack([bandok[a] & bandok[b] for a, b in COLORS_DES])
     print(f"  color validity: {valid.mean(0).round(3)}")
+    if raw:
+        return ra[keep], dec[keep], z[keep], colors, valid
 
     res = locus_residuals(z[keep], colors, valid)
     valid &= np.isfinite(res)
