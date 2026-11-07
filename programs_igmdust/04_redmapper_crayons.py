@@ -36,7 +36,10 @@ FG_ZRANGE_RM = (0.10, 0.70)          # crayons are 0.4-0.9 with 0.2 buffer
 MAX_RAN = 1_500_000                  # plenty: ~75x the cluster count
 
 
-def load_clusters(h5path):
+def load_clusters(h5path, lam_min=0.0, lam_max=np.inf):
+    """lgt20 selection, optionally further cut in richness; the release
+    randoms carry the richness they were drawn for (lambda_in), so the
+    same cut applies to them."""
     import h5py
     with h5py.File(h5path, "r") as f:
         sel = f[f"{INDEX}/select"][:]
@@ -44,21 +47,25 @@ def load_clusters(h5path):
         fra = g["ra"][:][sel]
         fdec = g["dec"][:][sel]
         fz = np.asarray(g["z_lambda"][:][sel], float)
-        lam = g["lambda_chisq"][:][sel]
-        print(f"  clusters (lgt20 select): {len(sel):,}  "
-              f"z_lambda [{fz.min():.2f},{fz.max():.2f}]  "
+        lam = np.asarray(g["lambda_chisq"][:][sel], float)
+        keep = (lam >= lam_min) & (lam < lam_max)
+        fra, fdec, fz, lam = fra[keep], fdec[keep], fz[keep], lam[keep]
+        print(f"  clusters (lgt20, {lam_min}<=lambda<{lam_max}): "
+              f"{keep.sum():,}  z_lambda [{fz.min():.2f},{fz.max():.2f}]  "
               f"lambda [{lam.min():.0f},{lam.max():.0f}]")
         rsel = f[f"{INDEX}/random_select"][:]
         r = f["randoms"]
-        rra = r["ra"][:][rsel]
-        rdec = r["dec"][:][rsel]
-        rz = np.asarray(r["ztrue"][:][rsel], float)
-        rw = np.asarray(r["weight"][:][rsel], float)
+        rlam = np.asarray(r["lambda_in"][:][rsel], float)
+        rkeep = (rlam >= lam_min) & (rlam < lam_max)
+        rra = r["ra"][:][rsel][rkeep]
+        rdec = r["dec"][:][rsel][rkeep]
+        rz = np.asarray(r["ztrue"][:][rsel], float)[rkeep]
+        rw = np.asarray(r["weight"][:][rsel], float)[rkeep]
     if len(rra) > MAX_RAN:
         rng = np.random.default_rng(3)
         pick = rng.choice(len(rra), MAX_RAN, replace=False)
         rra, rdec, rz, rw = rra[pick], rdec[pick], rz[pick], rw[pick]
-    print(f"  randoms (release, weighted): {len(rra):,}")
+    print(f"  randoms (release, weighted, same lambda cut): {len(rra):,}")
     return ((fra, fdec, fz, np.ones(len(fra))), (rra, rdec, rz, rw))
 
 
@@ -67,16 +74,20 @@ def main(a):
     pc.R_COEF["i"] = m01.R_I
     pc.COLORS = m01.COLORS_DES
     pc.JK_NSIDE = m01.JK_NSIDE
-    pc.FG_ZRANGE["redmapper"] = FG_ZRANGE_RM
-    pc.CHUNK = 10_000                # 20G SLURM limit (see 01)
+    name = "redmapper" + a.tag
+    pc.FG_ZRANGE[name] = FG_ZRANGE_RM
+    pc.RP_MAX = a.rp_max
+    # 20G SLURM limit (see 01); beyond 10 Mpc the low-z query radii grow
+    # to ~5 deg, so halve the chunk again.
+    pc.CHUNK = 5_000 if a.rp_max > 10 else 10_000
     edges, rp_mid = pc.rp_bins()
 
     print("== crayons: DES redMaGiC highlum_highz + Y3 Gold colors")
     cra, cdec, cz, cres, cval = m01.load_crayons(a.des_dir)
     print("== foregrounds: DES Y3 redMaPPer clusters")
-    fg, ran = load_clusters(a.h5)
+    fg, ran = load_clusters(a.h5, a.lambda_min, a.lambda_max)
 
-    pc.run_arrays("redmapper", fg, ran, (cra, cdec, cz, cres, cval),
+    pc.run_arrays(name, fg, ran, (cra, cdec, cz, cres, cval),
                   edges, rp_mid, a.out,
                   a.max_fg, tag=f"_sub{a.max_fg}" if a.max_fg else "")
 
@@ -88,6 +99,12 @@ if __name__ == "__main__":
     ap.add_argument("--pc02", default=m01.PC02_DEFAULT)
     ap.add_argument("--out", default=None)
     ap.add_argument("--max-fg", type=int, default=0)
+    ap.add_argument("--lambda-min", type=float, default=0.0)
+    ap.add_argument("--lambda-max", type=float, default=np.inf)
+    ap.add_argument("--rp-max", type=float, default=10.0,
+                    help="outer radius [Mpc]; 30 probes the McCleary tail")
+    ap.add_argument("--tag", default="",
+                    help="suffix for the output profile name")
     a = ap.parse_args()
     a.out = a.out or m01.load_pc(a.pc02).OUT_DEFAULT
     main(a)
