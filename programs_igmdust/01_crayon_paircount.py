@@ -186,38 +186,73 @@ def in_footprint(good, ra, dec, label):
 
 
 # ----------------------------------------------------------------- driver ---
+def load_redmagic_fg(des_dir, max_ran=8_000_000):
+    """McCleary's quiescent foregrounds: redMaGiC highdens + its randoms."""
+    with fits.open(f"{des_dir}/y3a2_gold2.2.1_redmagic_highdens.fits") as h:
+        d = h[1].data
+        fra = np.asarray(d["ra"], float)
+        fdec = np.asarray(d["dec"], float)
+        fz = np.asarray(d["zredmagic"], float)
+        fw = np.asarray(d["weight"], float)
+    print(f"  redMaGiC highdens: {len(fra):,}")
+    with fits.open(f"{des_dir}/y3a2_gold2.2.1_redmagic_highdens_randoms"
+                   ".fits") as h:
+        d = h[1].data
+        rra = np.asarray(d["ra"], float)
+        rdec = np.asarray(d["dec"], float)
+        rz = np.asarray(d["z"], float)
+    if len(rra) > max_ran:
+        rng = np.random.default_rng(9)
+        pick = rng.choice(len(rra), max_ran, replace=False)
+        rra, rdec, rz = rra[pick], rdec[pick], rz[pick]
+    print(f"  highdens randoms: {len(rra):,} (subsampled)")
+    return ((fra, fdec, fz, fw), (rra, rdec, rz, np.ones(len(rra))))
+
+
 def main(a):
+    global CRAYON_ZRANGE
+    if a.crayon_zmin or a.crayon_zmax:
+        CRAYON_ZRANGE = (a.crayon_zmin or CRAYON_ZRANGE[0],
+                         a.crayon_zmax or CRAYON_ZRANGE[1])
+        print(f"  crayon z range: {CRAYON_ZRANGE}")
     pc = load_pc(a.pc02)
     pc.R_COEF["i"] = R_I
     pc.COLORS = COLORS_DES
     pc.JK_NSIDE = JK_NSIDE
-    # --fg lrg is the McCleary-style quiescent case: DESI spectroscopic
-    # LRGs in place of her redMaGiC foregrounds, same crayon backgrounds.
-    name = "descrayon" if a.fg == "bgs" else "descrayonlrg"
-    pc.FG_ZRANGE[name] = pc.FG_ZRANGE[a.fg]
-    # crayons are ~200/deg2 and low-z slices sweep 2.7 deg radii: 50k-fg
-    # chunks OOM-killed the 20G SLURM job on the randoms pass; 10k is safe.
-    pc.CHUNK = 10_000
+    # --fg lrg: DESI spectroscopic LRGs; --fg redmagic: the faithful
+    # McCleary 2026 quiescent configuration (highdens 0.15<z<0.45
+    # foregrounds x highlum_highz 0.65<z<0.90 crayons, to 30 Mpc).
+    name = {"bgs": "descrayon", "lrg": "descrayonlrg",
+            "redmagic": "mccleary"}[a.fg]
+    pc.FG_ZRANGE[name] = ((0.15, 0.45) if a.fg == "redmagic"
+                          else pc.FG_ZRANGE[a.fg])
+    pc.RP_MAX = a.rp_max
+    # crayons are ~200/deg2 and low-z slices sweep wide radii: 50k-fg
+    # chunks OOM-killed the 20G SLURM job on the randoms pass.
+    pc.CHUNK = 5_000 if a.rp_max > 10 else 10_000
     edges, rp_mid = pc.rp_bins()
 
     print("== crayons: DES redMaGiC highlum_highz + Y3 Gold colors")
     cra, cdec, cz, cres, cval = load_crayons(a.des_dir)
-    good = load_footprint(a.des_dir)
 
-    print(f"== foregrounds: DESI DR1 {a.fg.upper()}")
-    fra, fdec, fz, fw = pc.load_lss(a.base, a.fg, "dat")
-    m = in_footprint(good, fra, fdec, a.fg.upper())
-    fra, fdec, fz, fw = fra[m], fdec[m], fz[m], fw[m]
-    if m.sum() == 0:
-        sys.exit("no foregrounds in the DES footprint — check mask/ordering")
+    if a.fg == "redmagic":
+        print("== foregrounds: DES redMaGiC highdens (McCleary config)")
+        fg, ran = load_redmagic_fg(a.des_dir)
+    else:
+        good = load_footprint(a.des_dir)
+        print(f"== foregrounds: DESI DR1 {a.fg.upper()}")
+        fra, fdec, fz, fw = pc.load_lss(a.base, a.fg, "dat")
+        m = in_footprint(good, fra, fdec, a.fg.upper())
+        if m.sum() == 0:
+            sys.exit("no foregrounds in the DES footprint — check mask")
+        fg = (fra[m], fdec[m], fz[m], fw[m])
+        print(f"== randoms: DESI DR1 {a.fg.upper()} LSS randoms")
+        rra, rdec, rz, rw = pc.load_lss(a.base, a.fg, "ran", nran=a.nran)
+        m = in_footprint(good, rra, rdec, "randoms")
+        ran = (rra[m], rdec[m], rz[m], rw[m])
 
-    print(f"== randoms: DESI DR1 {a.fg.upper()} LSS randoms")
-    rra, rdec, rz, rw = pc.load_lss(a.base, a.fg, "ran", nran=a.nran)
-    m = in_footprint(good, rra, rdec, "randoms")
-    rra, rdec, rz, rw = rra[m], rdec[m], rz[m], rw[m]
-
-    pc.run_arrays(name, (fra, fdec, fz, fw), (rra, rdec, rz, rw),
-                  (cra, cdec, cz, cres, cval), edges, rp_mid, a.out,
+    pc.run_arrays(name, fg, ran, (cra, cdec, cz, cres, cval),
+                  edges, rp_mid, a.out,
                   a.max_fg, tag=f"_sub{a.max_fg}" if a.max_fg else "")
 
 
@@ -253,8 +288,13 @@ def selftest():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument("--fg", choices=["bgs", "lrg"], default="bgs",
-                    help="foreground sample (lrg = McCleary-style)")
+    ap.add_argument("--fg", choices=["bgs", "lrg", "redmagic"],
+                    default="bgs",
+                    help="foregrounds (redmagic = faithful McCleary config)")
+    ap.add_argument("--crayon-zmin", type=float, default=None)
+    ap.add_argument("--crayon-zmax", type=float, default=None)
+    ap.add_argument("--rp-max", type=float, default=10.0,
+                    help="outer radius [Mpc]; McCleary fits to 30")
     ap.add_argument("--pc02", default=PC02_DEFAULT,
                     help="path to projects_desi 02_paircount.py")
     ap.add_argument("--des-dir", default=DES_DIR_DEFAULT)
