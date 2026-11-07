@@ -87,11 +87,13 @@ def locus_residuals(z, colors, valid):
     return res
 
 
-def load_crayons(des_dir, raw=False):
+def load_crayons(des_dir, raw=False, mwcorr=False):
     """redMaGiC crayons joined to Y3 Gold colors; locus residuals + valid.
 
     raw=True returns the observed colors instead of the locus residuals
-    (02_speczcalib builds its own loci against spectroscopic redshifts)."""
+    (02_speczcalib builds its own loci against spectroscopic redshifts).
+    mwcorr=True re-expresses the SFD-corrected SOF colors in the CSFD
+    convention (06_csfd): the iteration-2 test of the mid-scale deficit."""
     with fits.open(f"{des_dir}/{CRAYON_FILE}") as h:
         d = h[1].data
         cid = np.asarray(d["coadd_object_id"], np.int64)
@@ -124,6 +126,17 @@ def load_crayons(des_dir, raw=False):
                               for a, b in COLORS_DES])
     valid = np.column_stack([bandok[a] & bandok[b] for a, b in COLORS_DES])
     print(f"  color validity: {valid.mean(0).round(3)}")
+    if mwcorr:
+        spec6 = importlib.util.spec_from_file_location(
+            "csfd06", os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "06_csfd.py"))
+        c6 = importlib.util.module_from_spec(spec6)
+        spec6.loader.exec_module(c6)
+        dE = c6.delta_ebv(ra[keep], dec[keep])
+        dRc = np.array([c6.R_DES[a] - c6.R_DES[b] for a, b in COLORS_DES])
+        colors = colors + dE[:, None] * dRc[None, :]
+        print(f"  CSFD recorrection: E_SFD-E_CSFD mean {dE.mean():+.5f}, "
+              f"rms {dE.std():.5f} mag")
     if raw:
         return ra[keep], dec[keep], z[keep], colors, valid
 
@@ -224,7 +237,7 @@ def main(a):
     # foregrounds x highlum_highz 0.65<z<0.90 crayons; --rp-max 45
     # reaches their 30 h^-1 Mpc comoving outer fit radius).
     name = {"bgs": "descrayon", "lrg": "descrayonlrg",
-            "redmagic": "rmg"}[a.fg]
+            "redmagic": "rmg"}[a.fg] + ("csfd" if a.mwcorr else "")
     pc.FG_ZRANGE[name] = ((0.15, 0.45) if a.fg == "redmagic"
                           else pc.FG_ZRANGE[a.fg])
     pc.RP_MIN = a.rp_min
@@ -236,7 +249,7 @@ def main(a):
     edges, rp_mid = pc.rp_bins()
 
     print("== crayons: DES redMaGiC highlum_highz + Y3 Gold colors")
-    cra, cdec, cz, cres, cval = load_crayons(a.des_dir)
+    cra, cdec, cz, cres, cval = load_crayons(a.des_dir, mwcorr=a.mwcorr)
 
     if a.fg == "redmagic":
         print("== foregrounds: DES redMaGiC highdens (McCleary config)")
@@ -294,6 +307,8 @@ if __name__ == "__main__":
     ap.add_argument("--fg", choices=["bgs", "lrg", "redmagic"],
                     default="bgs",
                     help="foregrounds (redmagic = faithful McCleary config)")
+    ap.add_argument("--mwcorr", action="store_true",
+                    help="re-express SFD-corrected colors in CSFD")
     ap.add_argument("--crayon-zmin", type=float, default=None)
     ap.add_argument("--crayon-zmax", type=float, default=None)
     ap.add_argument("--rp-min", type=float, default=0.02,
