@@ -180,6 +180,9 @@ def main(a):
     pc.COLORS = COLORS_DES
     pc.JK_NSIDE = JK_NSIDE
     pc.FG_ZRANGE["descrayon"] = pc.FG_ZRANGE["bgs"]
+    # crayons are ~200/deg2 and low-z slices sweep 2.7 deg radii: 50k-fg
+    # chunks OOM-killed the 20G SLURM job on the randoms pass; 10k is safe.
+    pc.CHUNK = 10_000
     edges, rp_mid = pc.rp_bins()
 
     print("== crayons: DES redMaGiC highlum_highz + Y3 Gold colors")
