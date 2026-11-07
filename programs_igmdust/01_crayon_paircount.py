@@ -122,6 +122,38 @@ def load_crayons(des_dir):
 
 
 # -------------------------------------------------------------- footprint ---
+def ang2pix_ring(nside, ra_deg, dec_deg):
+    """HEALPix RING ang2pix in pure numpy (healpy won't build on astro4;
+    validated against healpy 1.20.1 to be bit-identical at nside 4096)."""
+    z = np.sin(np.radians(dec_deg))
+    tt = np.mod(np.radians(ra_deg), 2 * np.pi) / (np.pi / 2)      # [0, 4)
+    pix = np.empty(len(z), dtype=np.int64)
+    ncap = 2 * nside * (nside - 1)
+
+    eq = np.abs(z) <= 2.0 / 3.0
+    t1 = nside * (0.5 + tt[eq])
+    t2 = nside * z[eq] * 0.75
+    jp = np.floor(t1 - t2).astype(np.int64)      # ascending edge line
+    jm = np.floor(t1 + t2).astype(np.int64)      # descending edge line
+    ir = nside + 1 + jp - jm                     # ring counted from z=2/3
+    kshift = 1 - (ir & 1)
+    ip = (jp + jm - nside + kshift + 1) // 2
+    ip = np.mod(ip, 4 * nside)
+    pix[eq] = ncap + (ir - 1) * 4 * nside + ip
+
+    po = ~eq
+    tp = tt[po] - np.floor(tt[po])
+    tmp = nside * np.sqrt(3.0 * (1.0 - np.abs(z[po])))
+    jp = np.floor(tp * tmp).astype(np.int64)
+    jm = np.floor((1.0 - tp) * tmp).astype(np.int64)
+    ir = jp + jm + 1
+    ip = np.mod(np.floor(tt[po] * ir).astype(np.int64), 4 * ir)
+    north = z[po] > 0
+    pix[po] = np.where(north, 2 * ir * (ir - 1) + ip,
+                       12 * nside * nside - 2 * ir * (ir + 1) + ip)
+    return pix
+
+
 def load_footprint(des_dir):
     with fits.open(f"{des_dir}/{MASK_FILE}") as h:
         d = h[1].data
@@ -134,8 +166,7 @@ def load_footprint(des_dir):
 
 
 def in_footprint(good, ra, dec, label):
-    import healpy as hp
-    p = hp.ang2pix(MASK_NSIDE, ra, dec, lonlat=True)      # RING
+    p = ang2pix_ring(MASK_NSIDE, ra, dec)
     j = np.clip(np.searchsorted(good, p), 0, len(good) - 1)
     m = good[j] == p
     print(f"  {label}: {m.sum():,} / {len(ra):,} in DES footprint")
