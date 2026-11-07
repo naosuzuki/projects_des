@@ -219,17 +219,20 @@ def main(a):
     pc.R_COEF["i"] = R_I
     pc.COLORS = COLORS_DES
     pc.JK_NSIDE = JK_NSIDE
-    # --fg lrg: DESI spectroscopic LRGs; --fg redmagic: the faithful
-    # McCleary 2026 quiescent configuration (highdens 0.15<z<0.45
-    # foregrounds x highlum_highz 0.65<z<0.90 crayons, to 30 Mpc).
+    # --fg lrg: DESI spectroscopic LRGs; --fg redmagic: the redMaGiC-only
+    # configuration matching McCleary et al. (highdens 0.15<z<0.45
+    # foregrounds x highlum_highz 0.65<z<0.90 crayons; --rp-max 45
+    # reaches their 30 h^-1 Mpc comoving outer fit radius).
     name = {"bgs": "descrayon", "lrg": "descrayonlrg",
-            "redmagic": "mccleary"}[a.fg]
+            "redmagic": "rmg"}[a.fg]
     pc.FG_ZRANGE[name] = ((0.15, 0.45) if a.fg == "redmagic"
                           else pc.FG_ZRANGE[a.fg])
+    pc.RP_MIN = a.rp_min
     pc.RP_MAX = a.rp_max
     # crayons are ~200/deg2 and low-z slices sweep wide radii: 50k-fg
     # chunks OOM-killed the 20G SLURM job on the randoms pass.
-    pc.CHUNK = 5_000 if a.rp_max > 10 else 10_000
+    pc.CHUNK = (3_000 if a.rp_max > 30 else
+                5_000 if a.rp_max > 10 else 10_000)
     edges, rp_mid = pc.rp_bins()
 
     print("== crayons: DES redMaGiC highlum_highz + Y3 Gold colors")
@@ -293,8 +296,10 @@ if __name__ == "__main__":
                     help="foregrounds (redmagic = faithful McCleary config)")
     ap.add_argument("--crayon-zmin", type=float, default=None)
     ap.add_argument("--crayon-zmax", type=float, default=None)
+    ap.add_argument("--rp-min", type=float, default=0.02,
+                    help="inner radius [Mpc]")
     ap.add_argument("--rp-max", type=float, default=10.0,
-                    help="outer radius [Mpc]; McCleary fits to 30")
+                    help="outer radius [Mpc]; 45 covers 30 h^-1 Mpc com.")
     ap.add_argument("--pc02", default=PC02_DEFAULT,
                     help="path to projects_desi 02_paircount.py")
     ap.add_argument("--des-dir", default=DES_DIR_DEFAULT)

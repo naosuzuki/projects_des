@@ -76,6 +76,7 @@ def main(a):
     pc.JK_NSIDE = m01.JK_NSIDE
     name = "redmapper" + a.tag
     pc.FG_ZRANGE[name] = FG_ZRANGE_RM
+    pc.RP_MIN = a.rp_min
     pc.RP_MAX = a.rp_max
     # 20G SLURM limit (see 01); beyond 10 Mpc the low-z query radii grow
     # to ~5 deg, so halve the chunk again.
@@ -101,8 +102,9 @@ if __name__ == "__main__":
     ap.add_argument("--max-fg", type=int, default=0)
     ap.add_argument("--lambda-min", type=float, default=0.0)
     ap.add_argument("--lambda-max", type=float, default=np.inf)
+    ap.add_argument("--rp-min", type=float, default=0.02)
     ap.add_argument("--rp-max", type=float, default=10.0,
-                    help="outer radius [Mpc]; 30 probes the McCleary tail")
+                    help="outer radius [Mpc]; 45 covers 30 h^-1 Mpc com.")
     ap.add_argument("--tag", default="",
                     help="suffix for the output profile name")
     a = ap.parse_args()
