@@ -86,7 +86,8 @@ def running_median(x, y, nbin=25):
 
 def run(a):
     print("== crayons (raw colors)")
-    cra, cdec, zrm, colors, valid = m01.load_crayons(a.des_dir, raw=True)
+    cra, cdec, zrm, colors, valid = m01.load_crayons(
+        a.des_dir, raw=True, phot="mof" if a.mof else "sof")
     print("== DESI LRG spectroscopic redshifts")
     lra, ldec, lz = load_lrg_specz(a.base)
 
@@ -218,6 +219,8 @@ def selftest():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument("--mof", action="store_true",
+                    help="calibrate on MOF photometry (iteration 3)")
     ap.add_argument("--des-dir", default=m01.DES_DIR_DEFAULT)
     ap.add_argument("--base", default=DESI_BASE)
     ap.add_argument("--out", default=OUT_DEFAULT)
