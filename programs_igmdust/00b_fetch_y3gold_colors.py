@@ -48,6 +48,20 @@ COLS_DERED = ("coadd_object_id, "
 COLS_PLAIN = ("coadd_object_id, mag_auto_g, mag_auto_r, mag_auto_i, "
               "mag_auto_z, magerr_auto_g, magerr_auto_r, magerr_auto_i, "
               "magerr_auto_z, flags_gold, extended_class_sof")
+COLS_MOF = ("coadd_object_id, "
+            "mof_cm_mag_corrected_g, mof_cm_mag_corrected_r, "
+            "mof_cm_mag_corrected_i, mof_cm_mag_corrected_z, "
+            "mof_cm_mag_err_g, mof_cm_mag_err_r, "
+            "mof_cm_mag_err_i, mof_cm_mag_err_z, "
+            "flags_gold, extended_class_sof")
+
+# --mof: fetch MOF photometry (McCleary's choice) to a separate file;
+# selection columns (flags_gold, extended_class_sof) stay identical so
+# only the photometry changes between iterations.
+MOF = "--mof" in sys.argv
+if MOF:
+    PARTS = f"{DEST}/parts_mofcolors"
+    OUT = f"{DEST}/redmagic_highlum_highz_y3gold_mofcolors.fits"
 
 
 def tap_query(adql, timeout=300):
@@ -64,12 +78,14 @@ def tap_query(adql, timeout=300):
 
 def pick_columns():
     """Probe whether the _dered columns exist; fall back to plain."""
-    for cols in (COLS_DERED, COLS_PLAIN):
+    for cols in ((COLS_MOF,) if MOF else (COLS_DERED, COLS_PLAIN)):
         try:
             t = Table.read(tap_query(f"SELECT TOP 1 {cols} FROM {TABLE}",
                                      timeout=120), format="ascii.csv")
             assert len(t.colnames) >= 10
-            print(f"columns OK: {'SOF corrected' if cols is COLS_DERED else 'mag_auto'}")
+            lab = ("MOF corrected" if cols is COLS_MOF else
+                   "SOF corrected" if cols is COLS_DERED else "mag_auto")
+            print(f"columns OK: {lab}")
             return cols
         except Exception as e:                          # noqa: BLE001
             print(f"probe failed ({e}); trying fallback")

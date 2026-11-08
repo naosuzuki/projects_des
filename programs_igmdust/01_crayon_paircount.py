@@ -87,7 +87,7 @@ def locus_residuals(z, colors, valid):
     return res
 
 
-def load_crayons(des_dir, raw=False, mwcorr=False):
+def load_crayons(des_dir, raw=False, mwcorr=False, phot="sof"):
     """redMaGiC crayons joined to Y3 Gold colors; locus residuals + valid.
 
     raw=True returns the observed colors instead of the locus residuals
@@ -100,12 +100,15 @@ def load_crayons(des_dir, raw=False, mwcorr=False):
         ra = np.asarray(d["ra"], float)
         dec = np.asarray(d["dec"], float)
         z = np.asarray(d["zredmagic"], float)
-    with fits.open(f"{des_dir}/{COLOR_FILE}") as h:
+    cfile = (COLOR_FILE if phot == "sof" else
+             COLOR_FILE.replace("_colors", "_mofcolors"))
+    with fits.open(f"{des_dir}/{cfile}") as h:
         g = h[1].data
         gid = np.asarray(g["coadd_object_id"], np.int64)
-        mag = {b: np.asarray(g[f"sof_cm_mag_corrected_{b}"], float)
+        mag = {b: np.asarray(g[f"{phot}_cm_mag_corrected_{b}"], float)
                for b in "griz"}
-        err = {b: np.asarray(g[f"sof_cm_mag_err_{b}"], float) for b in "griz"}
+        err = {b: np.asarray(g[f"{phot}_cm_mag_err_{b}"], float)
+               for b in "griz"}
         flags = np.asarray(g["flags_gold"])
         ext = np.asarray(g["extended_class_sof"])
 
@@ -236,8 +239,9 @@ def main(a):
     # configuration matching McCleary et al. (highdens 0.15<z<0.45
     # foregrounds x highlum_highz 0.65<z<0.90 crayons; --rp-max 45
     # reaches their 30 h^-1 Mpc comoving outer fit radius).
-    name = {"bgs": "descrayon", "lrg": "descrayonlrg",
-            "redmagic": "rmg"}[a.fg] + ("csfd" if a.mwcorr else "")
+    name = ({"bgs": "descrayon", "lrg": "descrayonlrg",
+             "redmagic": "rmg"}[a.fg]
+            + ("mof" if a.mof else "") + ("csfd" if a.mwcorr else ""))
     pc.FG_ZRANGE[name] = ((0.15, 0.45) if a.fg == "redmagic"
                           else pc.FG_ZRANGE[a.fg])
     pc.RP_MIN = a.rp_min
@@ -249,7 +253,8 @@ def main(a):
     edges, rp_mid = pc.rp_bins()
 
     print("== crayons: DES redMaGiC highlum_highz + Y3 Gold colors")
-    cra, cdec, cz, cres, cval = load_crayons(a.des_dir, mwcorr=a.mwcorr)
+    cra, cdec, cz, cres, cval = load_crayons(
+        a.des_dir, mwcorr=a.mwcorr, phot="mof" if a.mof else "sof")
 
     if a.fg == "redmagic":
         print("== foregrounds: DES redMaGiC highdens (McCleary config)")
@@ -307,6 +312,9 @@ if __name__ == "__main__":
     ap.add_argument("--fg", choices=["bgs", "lrg", "redmagic"],
                     default="bgs",
                     help="foregrounds (redmagic = faithful McCleary config)")
+    ap.add_argument("--mof", action="store_true",
+                    help="use Y3 Gold MOF photometry (McCleary's choice) "
+                         "instead of SOF")
     ap.add_argument("--mwcorr", action="store_true",
                     help="re-express SFD-corrected colors in CSFD")
     ap.add_argument("--crayon-zmin", type=float, default=None)
